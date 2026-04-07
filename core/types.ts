@@ -9,6 +9,8 @@ export interface Stock {
   timestamp: number;
   trendLabel?: TrendLabel;
   trendScore?: number;
+  recentSlope?: number;
+  acceleration?: number;
   chartUrl?: string;
 }
 

@@ -23,6 +23,9 @@ export function loadConfig(): EngineConfig {
         ? [createTrendFilter({
             weakThreshold: Number(process.env.TREND_WEAK_THRESHOLD) || undefined,
             strongThreshold: Number(process.env.TREND_STRONG_THRESHOLD) || undefined,
+            recentWindowSize: Number(process.env.RECENT_WINDOW_SIZE) || undefined,
+            accelerationWeight: Number(process.env.ACCELERATION_WEIGHT) || undefined,
+            recentWeightMultiplier: Number(process.env.RECENT_WEIGHT_MULTIPLIER) || undefined,
           })]
         : []),
     ],

@@ -25,8 +25,12 @@ async function tick(): Promise<void> {
     return;
   }
 
-  // 4. Sort by trend score (descending) and cap at maxAlerts
-  stocks.sort((a, b) => (b.trendScore ?? 0) - (a.trendScore ?? 0));
+  // 4. Sort by trend score (primary) then acceleration (secondary), descending
+  stocks.sort((a, b) => {
+    const scoreDiff = (b.trendScore ?? 0) - (a.trendScore ?? 0);
+    if (scoreDiff !== 0) return scoreDiff;
+    return (b.acceleration ?? 0) - (a.acceleration ?? 0);
+  });
   stocks = stocks.slice(0, config.maxAlerts);
 
   // 5. Deduplicate
