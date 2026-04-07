@@ -6,12 +6,22 @@ export interface TelegramOptions {
   chatId?: string;
 }
 
+function formatStock(s: Stock): string {
+  const sign = s.percentChange >= 0 ? "+" : "";
+  const trend = s.trendLabel ? `Trend: ${s.trendLabel}${s.trendScore != null ? ` (${s.trendScore})` : ""}` : "";
+  const chart = s.chartUrl ?? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(s.symbol)}`;
+
+  return [
+    `*${s.symbol}* ${sign}${s.percentChange.toFixed(2)}%`,
+    `Price: $${s.price.toFixed(2)}`,
+    `Volume: ${formatVolume(s.volume)}`,
+    ...(trend ? [trend] : []),
+    `Chart: ${chart}`,
+  ].join("\n");
+}
+
 function formatMessage(stocks: Stock[]): string {
-  const lines = stocks.map(
-    (s) =>
-      `*${s.symbol}* — $${s.price.toFixed(2)} (${s.percentChange >= 0 ? "+" : ""}${s.percentChange.toFixed(2)}%) | Vol: ${formatVolume(s.volume)}`
-  );
-  return `🦞 *StockLobster Alert*\n${stocks.length} signal(s) detected:\n\n${lines.join("\n")}`;
+  return `🚨 *Momentum Candidates*\n\n${stocks.map(formatStock).join("\n\n")}`;
 }
 
 function formatVolume(vol: number): string {

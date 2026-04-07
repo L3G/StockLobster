@@ -1,3 +1,5 @@
+export type TrendLabel = "strong_uptrend" | "weak_uptrend" | "choppy";
+
 export interface Stock {
   symbol: string;
   price: number;
@@ -5,6 +7,9 @@ export interface Stock {
   volume: number;
   avgVolume?: number;
   timestamp: number;
+  trendLabel?: TrendLabel;
+  trendScore?: number;
+  chartUrl?: string;
 }
 
 export interface StockFilter {
@@ -28,6 +33,8 @@ export interface EngineConfig {
   filters: StockFilter[];
   notifiers: Notifier[];
   pollIntervalMs: number;
+  dedupeCooldownMs: number;
+  maxAlerts: number;
   timeWindow?: {
     startHour: number; // 0-23, in local time
     endHour: number;

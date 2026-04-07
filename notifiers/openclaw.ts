@@ -24,6 +24,9 @@ export function createOpenClawNotifier(opts: OpenClawOptions = {}): Notifier {
           volume: s.volume,
           avgVolume: s.avgVolume,
           timestamp: s.timestamp,
+          trendLabel: s.trendLabel,
+          trendScore: s.trendScore,
+          chartUrl: s.chartUrl ?? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(s.symbol)}`,
         })),
       };
 
