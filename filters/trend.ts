@@ -23,13 +23,15 @@ export interface TrendFilterOptions {
 const DEFAULTS: Required<TrendFilterOptions> = {
   weakThreshold: 40,
   strongThreshold: 65,
-  barCount: 24,            // ~2 hours of 5m bars
-  recentWindowSize: 8,     // ~40 minutes of 5m bars
+  barCount: 24,
+  recentWindowSize: 8,
   recentWeightMultiplier: 1.5,
   accelerationWeight: 0.10,
   interval: "5m",
   range: "1d",
 };
+
+const MIN_BARS = 5;
 
 export interface Bar {
   close: number;
@@ -53,10 +55,18 @@ export interface TrendAnalysis {
   label: TrendLabel;
 }
 
+// --- Safe number helper ---
+
+/** Clamp NaN / Infinity to 0. */
+export function safe(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return value;
+}
+
 // --- Exported helpers (unit-test-friendly) ---
 
 export function computeSlope(closes: number[]): number {
-  if (closes.length < 2) return 0;
+  if (closes.length <= 1) return 0;
   const n = closes.length;
   let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
   for (let i = 0; i < n; i++) {
@@ -69,7 +79,8 @@ export function computeSlope(closes: number[]): number {
   if (denom === 0) return 0;
   const slope = (n * sumXY - sumX * sumY) / denom;
   const mean = sumY / n;
-  return mean === 0 ? 0 : (slope / mean) * 100;
+  if (mean === 0) return 0;
+  return safe((slope / mean) * 100);
 }
 
 export function countHigherHighs(bars: Bar[]): number {
@@ -92,6 +103,7 @@ export function countReversals(closes: number[], threshold: number = 0.003): num
   if (closes.length < 3) return 0;
   let reversals = 0;
   for (let i = 2; i < closes.length; i++) {
+    if (closes[i - 2] === 0 || closes[i - 1] === 0) continue;
     const prev = (closes[i - 1] - closes[i - 2]) / closes[i - 2];
     const curr = (closes[i] - closes[i - 1]) / closes[i - 1];
     if (Math.abs(prev) > threshold && Math.abs(curr) > threshold && Math.sign(prev) !== Math.sign(curr)) {
@@ -105,38 +117,53 @@ export function nearRecentHigh(closes: number[]): number {
   if (closes.length === 0) return 0;
   const recent = closes[closes.length - 1];
   const high = Math.max(...closes);
-  return high === 0 ? 0 : recent / high;
+  if (high === 0) return 0;
+  return safe(recent / high);
 }
+
+/** Filter out bars with invalid numeric values. */
+export function sanitizeBars(bars: Bar[]): Bar[] {
+  return bars.filter(
+    (b) =>
+      Number.isFinite(b.close) &&
+      Number.isFinite(b.high) &&
+      Number.isFinite(b.low) &&
+      b.close > 0 &&
+      b.high > 0 &&
+      b.low > 0
+  );
+}
+
+const ZERO_METRICS: TrendMetrics = { slope: 0, hhRatio: 0, hlRatio: 0, revRatio: 0, nearHigh: 0 };
+
+const CHOPPY_ANALYSIS: TrendAnalysis = {
+  overall: ZERO_METRICS,
+  recent: ZERO_METRICS,
+  acceleration: 0,
+  score: 0,
+  label: "choppy",
+};
 
 /** Compute all trend metrics for a set of bars. */
 export function computeMetrics(bars: Bar[]): TrendMetrics {
+  if (bars.length <= 1) return ZERO_METRICS;
+
   const closes = bars.map((b) => b.close);
   const n = Math.max(bars.length - 1, 1);
   const maxRev = Math.max(bars.length - 2, 1);
 
   return {
-    slope: computeSlope(closes),
-    hhRatio: countHigherHighs(bars) / n,
-    hlRatio: countHigherLows(bars) / n,
-    revRatio: countReversals(closes) / maxRev,
-    nearHigh: nearRecentHigh(closes),
+    slope: safe(computeSlope(closes)),
+    hhRatio: safe(countHigherHighs(bars) / n),
+    hlRatio: safe(countHigherLows(bars) / n),
+    revRatio: safe(countReversals(closes) / maxRev),
+    nearHigh: safe(nearRecentHigh(closes)),
   };
 }
 
 /**
  * Score a trend using both overall and recent-window metrics.
- *
- * Weights (default, before acceleration):
- *   overall slope:     15%
- *   recent slope:      20%
- *   overall HH/HL:     10% (5% each)
- *   recent HH/HL:      15% (7.5% each)
- *   overall reversals: 10% (penalty)
- *   recent reversals:  10% (penalty, weighted heavier per bar)
- *   near high (full):  10%
- *   acceleration:      10% (bonus/penalty)
- *
- * All component scores are 0–100 before weighting.
+ * All inputs are wrapped with safe() to prevent NaN propagation.
  * Final score is clamped to 0–100.
  */
 export function scoreTrendWithAcceleration(
@@ -146,27 +173,25 @@ export function scoreTrendWithAcceleration(
   accelerationWeight: number,
   recentMultiplier: number,
 ): number {
-  // Convert raw metrics to 0–100 component scores
-  const toSlopeScore = (s: number) => Math.min(Math.max(s * 20, 0), 100);
+  const toSlopeScore = (s: number) => Math.min(Math.max(safe(s) * 20, 0), 100);
 
   const overallSlopeScore = toSlopeScore(overall.slope);
-  const recentSlopeScore = toSlopeScore(recent.slope * recentMultiplier);
+  const recentSlopeScore = toSlopeScore(safe(recent.slope) * safe(recentMultiplier));
 
-  const overallHHScore = overall.hhRatio * 100;
-  const overallHLScore = overall.hlRatio * 100;
-  const recentHHScore = recent.hhRatio * 100;
-  const recentHLScore = recent.hlRatio * 100;
+  const overallHHScore = safe(overall.hhRatio) * 100;
+  const overallHLScore = safe(overall.hlRatio) * 100;
+  const recentHHScore = safe(recent.hhRatio) * 100;
+  const recentHLScore = safe(recent.hlRatio) * 100;
 
-  const overallRevScore = (1 - overall.revRatio) * 100;
-  const recentRevScore = (1 - recent.revRatio) * 100;
+  const overallRevScore = (1 - safe(overall.revRatio)) * 100;
+  const recentRevScore = (1 - safe(recent.revRatio)) * 100;
 
-  const nearHighScore = overall.nearHigh * 100;
+  const nearHighScore = safe(overall.nearHigh) * 100;
 
-  // Acceleration: positive = strengthening, scale to 0–100 centered at 50
-  const accelScore = Math.min(Math.max(50 + acceleration * 30, 0), 100);
+  const accelScore = Math.min(Math.max(50 + safe(acceleration) * 30, 0), 100);
 
-  // Remaining weight after acceleration
-  const baseWeight = 1 - accelerationWeight;
+  const aw = safe(accelerationWeight);
+  const baseWeight = 1 - aw;
 
   const base =
     overallSlopeScore * 0.15 +
@@ -179,8 +204,8 @@ export function scoreTrendWithAcceleration(
     recentRevScore * 0.10 +
     nearHighScore * 0.10;
 
-  const score = base * baseWeight + accelScore * accelerationWeight;
-  return Math.round(Math.min(Math.max(score, 0), 100));
+  const score = safe(base) * baseWeight + accelScore * aw;
+  return Math.round(Math.min(Math.max(safe(score), 0), 100));
 }
 
 /**
@@ -196,9 +221,7 @@ export function classifyTrend(
   weakThreshold: number,
   strongThreshold: number,
 ): TrendLabel {
-  // High reversal in recent window → choppy regardless of score
   if (recentRevRatio > 0.6) return "choppy";
-
   if (score >= strongThreshold && acceleration >= -0.5) return "strong_uptrend";
   if (score >= weakThreshold) return "weak_uptrend";
   return "choppy";
@@ -207,6 +230,7 @@ export function classifyTrend(
 /**
  * Full trend analysis: splits bars into overall + recent, computes
  * metrics, acceleration, score, and classification.
+ * Returns a safe choppy default if data is insufficient.
  */
 export function analyzeTrend(
   bars: Bar[],
@@ -218,12 +242,15 @@ export function analyzeTrend(
     recentWeightMultiplier: number;
   },
 ): TrendAnalysis {
-  const overall = computeMetrics(bars);
+  const clean = sanitizeBars(bars);
+  if (clean.length < MIN_BARS) return CHOPPY_ANALYSIS;
 
-  const recentBars = bars.slice(-recentWindowSize);
-  const recent = computeMetrics(recentBars);
+  const overall = computeMetrics(clean);
 
-  const acceleration = recent.slope - overall.slope;
+  const recentBars = clean.slice(-Math.min(recentWindowSize, clean.length));
+  const recent = recentBars.length >= 2 ? computeMetrics(recentBars) : ZERO_METRICS;
+
+  const acceleration = safe(recent.slope - overall.slope);
 
   const score = scoreTrendWithAcceleration(
     overall,
@@ -238,7 +265,7 @@ export function analyzeTrend(
   return { overall, recent, acceleration, score, label };
 }
 
-// --- Legacy compat: keep old function signatures for any external callers ---
+// --- Legacy compat ---
 
 export function scoreTrend(bars: Bar[]): number {
   const analysis = analyzeTrend(bars, Math.min(8, bars.length), {
@@ -314,26 +341,30 @@ export function createTrendFilter(opts: TrendFilterOptions = {}): StockFilter {
       for (const stock of stocks) {
         try {
           const bars = await fetchIntradayBars(stock.symbol, config.interval, config.range, config.barCount);
+          const clean = sanitizeBars(bars);
 
-          if (bars.length < 3) {
-            log("warn", `[trend] ${stock.symbol}: insufficient bars (${bars.length}) — skipping`);
+          if (clean.length < MIN_BARS) {
+            log("warn", `[trend] ${stock.symbol}: insufficient valid bars (${clean.length}/${bars.length}) — defaulting to choppy`);
             continue;
           }
 
-          const analysis = analyzeTrend(bars, Math.min(config.recentWindowSize, bars.length), {
+          const analysis = analyzeTrend(clean, config.recentWindowSize, {
             weakThreshold: config.weakThreshold,
             strongThreshold: config.strongThreshold,
             accelerationWeight: config.accelerationWeight,
             recentWeightMultiplier: config.recentWeightMultiplier,
           });
 
+          const recentUsable = clean.length >= config.recentWindowSize;
+
           log(
             "info",
             `[trend] ${stock.symbol}: ${analysis.label} ` +
             `score=${analysis.score} ` +
-            `slope=${analysis.overall.slope.toFixed(3)} ` +
-            `recentSlope=${analysis.recent.slope.toFixed(3)} ` +
-            `accel=${analysis.acceleration.toFixed(3)}`
+            `slope=${safe(analysis.overall.slope).toFixed(3)} ` +
+            `recentSlope=${safe(analysis.recent.slope).toFixed(3)} ` +
+            `accel=${safe(analysis.acceleration).toFixed(3)} ` +
+            `bars=${clean.length} recentWindow=${recentUsable ? "ok" : "partial"}`
           );
 
           if (analysis.label === "choppy") continue;
@@ -342,8 +373,8 @@ export function createTrendFilter(opts: TrendFilterOptions = {}): StockFilter {
             ...stock,
             trendLabel: analysis.label,
             trendScore: analysis.score,
-            recentSlope: Math.round(analysis.recent.slope * 1000) / 1000,
-            acceleration: Math.round(analysis.acceleration * 1000) / 1000,
+            recentSlope: safe(Math.round(analysis.recent.slope * 1000) / 1000),
+            acceleration: safe(Math.round(analysis.acceleration * 1000) / 1000),
             chartUrl: `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(stock.symbol)}`,
           });
         } catch (err) {
