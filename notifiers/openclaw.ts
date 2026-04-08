@@ -2,58 +2,83 @@ import type { Stock, Notifier, SignalMeta } from "../core/types.js";
 import { log } from "../utils/logger.js";
 
 export interface OpenClawOptions {
+  hooksUrl?: string;
+  hooksToken?: string;
+  /** @deprecated Use hooksUrl */
   gatewayUrl?: string;
+  /** @deprecated Use hooksToken */
   apiKey?: string;
 }
 
 export function createOpenClawNotifier(opts: OpenClawOptions = {}): Notifier {
-  const gatewayUrl = opts.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? "http://localhost:3000/api/ingest";
-  const apiKey = opts.apiKey ?? process.env.OPENCLAW_API_KEY;
+  const hooksUrl =
+    opts.hooksUrl ??
+    opts.gatewayUrl ??
+    process.env.OPENCLAW_HOOKS_URL ??
+    process.env.OPENCLAW_GATEWAY_URL ??
+    "http://127.0.0.1:18789/hooks/stocklobster";
+
+  const hooksToken =
+    opts.hooksToken ??
+    opts.apiKey ??
+    process.env.OPENCLAW_HOOKS_TOKEN ??
+    process.env.OPENCLAW_API_KEY;
 
   return {
     name: "openclaw",
 
     async send(stocks: Stock[], meta?: SignalMeta): Promise<void> {
-      const payload = {
-        type: "signal_batch",
-        strategy: meta?.strategy ?? "unknown",
-        timestamp: Date.now(),
-        meta: {
-          count: stocks.length,
-        },
-        signals: stocks.map((s) => ({
-          symbol: s.symbol,
-          price: s.price,
-          percentChange: s.percentChange,
-          volume: s.volume,
-          trendLabel: s.trendLabel,
-          trendScore: s.trendScore,
-          acceleration: s.acceleration,
-          chartUrl: s.chartUrl ?? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(s.symbol)}`,
-        })),
-      };
+      const strategy = meta?.strategy ?? "unknown";
+      const now = new Date().toISOString();
+
+      log("info", `[openclaw] Sending ${stocks.length} signal(s) to ${hooksUrl}`);
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
-      if (apiKey) {
-        headers["Authorization"] = `Bearer ${apiKey}`;
+      if (hooksToken) {
+        headers["Authorization"] = `Bearer ${hooksToken}`;
       }
 
-      log("info", `[openclaw] Sending ${stocks.length} signal(s) to ${gatewayUrl} (strategy=${meta?.strategy ?? "unknown"})`);
+      const results = await Promise.allSettled(
+        stocks.map((s) => {
+          const payload = {
+            source: "stocklobster",
+            event: "screen_hit",
+            symbol: s.symbol,
+            message: `${s.symbol} hit ${strategy} criteria`,
+            timestamp: now,
+            data: {
+              price: s.price,
+              changePct: s.percentChange,
+              volume: s.volume,
+              strategy,
+            },
+          };
 
-      const res = await fetch(gatewayUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      });
+          return fetch(hooksUrl, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(payload),
+          }).then(async (res) => {
+            if (!res.ok) {
+              throw new Error(`HTTP ${res.status} for ${s.symbol}`);
+            }
+            return s.symbol;
+          });
+        })
+      );
 
-      if (!res.ok) {
-        log("error", `[openclaw] HTTP ${res.status} ${res.statusText} from ${gatewayUrl}`);
-        throw new Error(`OpenClaw responded with ${res.status}: ${res.statusText}`);
+      let succeeded = 0;
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          succeeded++;
+        } else {
+          log("error", `[openclaw] Failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+        }
       }
 
-      log("info", `[openclaw] Delivered ${stocks.length} signal(s) — HTTP ${res.status}`);
+      log("info", `[openclaw] Delivered ${succeeded}/${stocks.length} signal(s)`);
     },
   };
 }
