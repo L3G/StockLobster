@@ -1,4 +1,4 @@
-export type TrendLabel = "strong_uptrend" | "weak_uptrend" | "choppy";
+export type TrendLabel = "strong_uptrend" | "weak_uptrend" | "choppy" | "unknown";
 
 export interface Stock {
   symbol: string;

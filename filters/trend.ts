@@ -281,78 +281,79 @@ export function scoreTrend(bars: Bar[]): number {
 
 /**
  * Fetch bar data from Yahoo Finance chart API.
- * Returns null on any failure (HTTP error, bad response, network issue)
- * so the caller can degrade gracefully instead of crashing.
+ * Returns null on any failure so the caller can degrade gracefully.
  *
- * Example working URL:
+ * Authentication (YAHOO_CRUMB + YAHOO_COOKIE) is optional:
+ * - If set: sends authenticated request (more reliable)
+ * - If not set: attempts unauthenticated request (may work for some endpoints/symbols)
+ *
+ * Example URL:
  *   https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=5m&range=1d
- *
- * Note: This endpoint requires a valid crumb + cookie pair.
- * Set YAHOO_CRUMB and YAHOO_COOKIE env vars. Without them, Yahoo
- * returns HTTP 400 or 401.
  */
 async function fetchChartBars(symbol: string, interval: string, range: string, barCount: number): Promise<Bar[] | null> {
-  // Use the raw symbol without encoding for the path segment —
-  // Yahoo expects e.g. /chart/BRK-B not /chart/BRK%2DB
-  const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`);
-  url.searchParams.set("interval", interval);
-  url.searchParams.set("range", range);
-
+  const baseUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
   const crumb = process.env.YAHOO_CRUMB;
   const cookie = process.env.YAHOO_COOKIE;
-
-  if (crumb) {
-    url.searchParams.set("crumb", crumb);
-  }
 
   const headers: Record<string, string> = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)",
   };
-  if (cookie) {
-    headers["Cookie"] = cookie;
+
+  // Build URL with query params
+  const url = new URL(baseUrl);
+  url.searchParams.set("interval", interval);
+  url.searchParams.set("range", range);
+
+  // Try authenticated request first if credentials exist, then fall back to unauthenticated
+  const attempts: Array<{ label: string; url: string; headers: Record<string, string> }> = [];
+
+  if (crumb && cookie) {
+    const authUrl = new URL(url.toString());
+    authUrl.searchParams.set("crumb", crumb);
+    attempts.push({ label: "authenticated", url: authUrl.toString(), headers: { ...headers, Cookie: cookie } });
   }
 
-  let res: Response;
-  try {
-    res = await fetch(url.toString(), { headers });
-  } catch (err) {
-    log("warn", `[trend] ${symbol}: network error fetching chart data — ${err instanceof Error ? err.message : String(err)}`);
-    return null;
-  }
+  // Always include unauthenticated as a fallback
+  attempts.push({ label: "unauthenticated", url: url.toString(), headers });
 
-  if (!res.ok) {
-    log("warn", `[trend] ${symbol}: failed to fetch chart data (status ${res.status})`);
-    return null;
-  }
-
-  let data: unknown;
-  try {
-    data = await res.json();
-  } catch {
-    log("warn", `[trend] ${symbol}: invalid JSON in chart response`);
-    return null;
-  }
-
-  // Validate response structure
-  const result = (data as any)?.chart?.result?.[0];
-  const quote = result?.indicators?.quote?.[0];
-  if (!quote || !Array.isArray(quote.close)) {
-    log("warn", `[trend] ${symbol}: unexpected chart response structure`);
-    return null;
-  }
-
-  const closes: (number | null)[] = quote.close ?? [];
-  const highs: (number | null)[] = quote.high ?? [];
-  const lows: (number | null)[] = quote.low ?? [];
-
-  const bars: Bar[] = [];
-  for (let i = 0; i < closes.length; i++) {
-    if (closes[i] != null && highs[i] != null && lows[i] != null) {
-      bars.push({ close: closes[i]!, high: highs[i]!, low: lows[i]! });
+  for (const attempt of attempts) {
+    let res: Response;
+    try {
+      res = await fetch(attempt.url, { headers: attempt.headers });
+    } catch {
+      continue; // network error — try next attempt
     }
+
+    if (!res.ok) continue;
+
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      continue;
+    }
+
+    // Validate response structure
+    const result = (data as any)?.chart?.result?.[0];
+    const quote = result?.indicators?.quote?.[0];
+    if (!quote || !Array.isArray(quote.close)) continue;
+
+    const closes: (number | null)[] = quote.close ?? [];
+    const highs: (number | null)[] = quote.high ?? [];
+    const lows: (number | null)[] = quote.low ?? [];
+
+    const bars: Bar[] = [];
+    for (let i = 0; i < closes.length; i++) {
+      if (closes[i] != null && highs[i] != null && lows[i] != null) {
+        bars.push({ close: closes[i]!, high: highs[i]!, low: lows[i]! });
+      }
+    }
+
+    return bars.slice(-barCount);
   }
 
-  return bars.slice(-barCount);
+  // All attempts failed — caller handles null
+  return null;
 }
 
 // --- Filter factory ---
@@ -365,21 +366,26 @@ export function createTrendFilter(opts: TrendFilterOptions = {}): StockFilter {
 
     async apply(stocks: Stock[]): Promise<Stock[]> {
       const results: Stock[] = [];
+      const unavailable: string[] = [];
 
       log("info", `[trend] Analyzing ${stocks.length} candidate(s)...`);
 
       for (const stock of stocks) {
+        const chartUrl = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(stock.symbol)}`;
         const bars = await fetchChartBars(stock.symbol, config.interval, config.range, config.barCount);
 
-        // Fetch failed or returned no data — skip gracefully
+        // Fetch failed or returned no data — pass through with "unknown" label
         if (!bars) {
+          unavailable.push(stock.symbol);
+          results.push({ ...stock, trendLabel: "unknown", chartUrl });
           continue;
         }
 
         const clean = sanitizeBars(bars);
 
         if (clean.length < MIN_BARS) {
-          log("warn", `[trend] ${stock.symbol}: insufficient valid bars (${clean.length}/${bars.length}) — skipping`);
+          unavailable.push(stock.symbol);
+          results.push({ ...stock, trendLabel: "unknown", chartUrl });
           continue;
         }
 
@@ -410,8 +416,12 @@ export function createTrendFilter(opts: TrendFilterOptions = {}): StockFilter {
           trendScore: analysis.score,
           recentSlope: safe(Math.round(analysis.recent.slope * 1000) / 1000),
           acceleration: safe(Math.round(analysis.acceleration * 1000) / 1000),
-          chartUrl: `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(stock.symbol)}`,
+          chartUrl,
         });
+      }
+
+      if (unavailable.length > 0) {
+        log("warn", `[trend] Trend data unavailable for ${unavailable.length} symbol(s): ${unavailable.join(", ")}`);
       }
 
       log("info", `[trend] ${results.length}/${stocks.length} stocks passed filter`);

@@ -25,11 +25,23 @@ async function tick(): Promise<void> {
     return;
   }
 
-  // 4. Sort by trend score (primary) then acceleration (secondary), descending
+  // 4. Sort: scored stocks first (by trendScore desc, then acceleration desc),
+  //    then unscored stocks (by percentChange desc)
   stocks.sort((a, b) => {
-    const scoreDiff = (b.trendScore ?? 0) - (a.trendScore ?? 0);
-    if (scoreDiff !== 0) return scoreDiff;
-    return (b.acceleration ?? 0) - (a.acceleration ?? 0);
+    const aHasScore = a.trendScore != null;
+    const bHasScore = b.trendScore != null;
+
+    // Scored stocks always rank above unscored
+    if (aHasScore !== bHasScore) return aHasScore ? -1 : 1;
+
+    if (aHasScore && bHasScore) {
+      const scoreDiff = b.trendScore! - a.trendScore!;
+      if (scoreDiff !== 0) return scoreDiff;
+      return (b.acceleration ?? 0) - (a.acceleration ?? 0);
+    }
+
+    // Both unscored — sort by percentChange
+    return (b.percentChange ?? 0) - (a.percentChange ?? 0);
   });
   stocks = stocks.slice(0, config.maxAlerts);
 

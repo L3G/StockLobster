@@ -168,6 +168,16 @@ export const mySource: DataSource = {
 
 Then set it as `dataSource` in `apps/market-engine/config.ts`.
 
+## Yahoo Finance Authentication (Optional)
+
+The trend filter fetches chart data from Yahoo Finance. Authentication via `YAHOO_CRUMB` + `YAHOO_COOKIE` is **optional**:
+
+- **With auth**: Authenticated requests are tried first (more reliable, broader symbol coverage)
+- **Without auth**: Unauthenticated requests are attempted as a fallback (works for many symbols)
+- **If both fail**: The stock passes through with `trendLabel: "unknown"` and no trend score — it is **not** dropped from results
+
+The system works out-of-the-box without Yahoo credentials. Trend scoring simply won't be available for symbols where the API fails.
+
 ## Market Hours (Optional)
 
 Market-specific time checks are available in `utils/markets/` but are **not** enforced by the core engine. Use them in your own strategy or time-window config:
@@ -195,8 +205,8 @@ Or use the generic `TIME_WINDOW_START` / `TIME_WINDOW_END` env vars to restrict 
       "price": 185.50,
       "percentChange": 3.2,
       "volume": 12345678,
-      "trendLabel": "strong_uptrend",
-      "trendScore": 78,
+      "trendLabel": "strong_uptrend",  // or "weak_uptrend", "choppy", "unknown"
+      "trendScore": 78,               // null when trendLabel is "unknown"
       "acceleration": 0.42,
       "chartUrl": "https://www.tradingview.com/chart/?symbol=AAPL"
     }
