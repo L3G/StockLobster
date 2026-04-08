@@ -6,7 +6,7 @@ export interface TrendFilterOptions {
   weakThreshold?: number;
   /** Minimum score to qualify as strong_uptrend (0–100) */
   strongThreshold?: number;
-  /** Total number of recent 5m bars to fetch */
+  /** Total number of bars to analyze */
   barCount?: number;
   /** Number of bars in the recent window (last N bars) */
   recentWindowSize?: number;
@@ -23,7 +23,7 @@ export interface TrendFilterOptions {
 const DEFAULTS: Required<TrendFilterOptions> = {
   weakThreshold: 40,
   strongThreshold: 65,
-  barCount: 24,
+  barCount: 24,            // configurable: e.g. 24 bars of 5m = ~2h, or 24 bars of 1d = ~1mo
   recentWindowSize: 8,
   recentWeightMultiplier: 1.5,
   accelerationWeight: 0.10,

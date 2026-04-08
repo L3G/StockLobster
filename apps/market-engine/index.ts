@@ -2,20 +2,12 @@ import { loadConfig } from "./config.js";
 import { startScheduler } from "./scheduler.js";
 import { log } from "../../utils/logger.js";
 import { createDeduplicator } from "../../utils/dedupe.js";
-import { isMarketOpen } from "../../utils/time.js";
 import type { Stock } from "../../core/types.js";
 
 const config = loadConfig();
 const dedupe = createDeduplicator(config.dedupeCooldownMs);
 
 async function tick(): Promise<void> {
-  const marketOpen = isMarketOpen();
-
-  if (!marketOpen) {
-    log("info", "Market closed — skipping trend analysis");
-    return;
-  }
-
   // 1. Fetch raw data
   const raw = await config.dataSource.fetch();
 
@@ -23,8 +15,8 @@ async function tick(): Promise<void> {
   let stocks: Stock[] = config.dataSource.normalize(raw);
   log("info", `Normalized ${stocks.length} stocks`);
 
-  // 3. Apply filters (chained)
-  for (const filter of config.filters) {
+  // 3. Apply strategy filters (chained)
+  for (const filter of config.strategy.filters) {
     stocks = await filter.apply(stocks);
   }
 
@@ -52,9 +44,10 @@ async function tick(): Promise<void> {
   log("info", `${stocks.length} stock(s) passed all filters — notifying`);
 
   // 6. Send to notifiers
+  const meta = { strategy: config.strategy.name, count: stocks.length };
   for (const notifier of config.notifiers) {
     try {
-      await notifier.send(stocks);
+      await notifier.send(stocks, meta);
     } catch (err) {
       log("error", `Notifier [${notifier.name}] failed: ${err instanceof Error ? err.message : String(err)}`);
     }

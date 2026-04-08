@@ -1,4 +1,4 @@
-import type { Stock, Notifier } from "../core/types.js";
+import type { Stock, Notifier, SignalMeta } from "../core/types.js";
 import { log } from "../utils/logger.js";
 
 export interface OpenClawOptions {
@@ -13,10 +13,14 @@ export function createOpenClawNotifier(opts: OpenClawOptions = {}): Notifier {
   return {
     name: "openclaw",
 
-    async send(stocks: Stock[]): Promise<void> {
+    async send(stocks: Stock[], meta?: SignalMeta): Promise<void> {
       const payload = {
-        type: "momentum_candidates",
+        type: "signal_batch",
+        strategy: meta?.strategy ?? "unknown",
         timestamp: Date.now(),
+        meta: {
+          count: stocks.length,
+        },
         signals: stocks.map((s) => ({
           symbol: s.symbol,
           price: s.price,
@@ -36,7 +40,7 @@ export function createOpenClawNotifier(opts: OpenClawOptions = {}): Notifier {
         headers["Authorization"] = `Bearer ${apiKey}`;
       }
 
-      log("info", `[openclaw] Sending ${stocks.length} signal(s) to ${gatewayUrl}`);
+      log("info", `[openclaw] Sending ${stocks.length} signal(s) to ${gatewayUrl} (strategy=${meta?.strategy ?? "unknown"})`);
 
       const res = await fetch(gatewayUrl, {
         method: "POST",

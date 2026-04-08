@@ -21,7 +21,7 @@ export interface StockFilter {
 
 export interface Notifier {
   name: string;
-  send(stocks: Stock[]): Promise<void>;
+  send(stocks: Stock[], meta?: SignalMeta): Promise<void>;
 }
 
 export interface DataSource {
@@ -30,15 +30,26 @@ export interface DataSource {
   normalize(raw: unknown): Stock[];
 }
 
+export interface Strategy {
+  name: string;
+  description?: string;
+  filters: StockFilter[];
+}
+
+export interface SignalMeta {
+  strategy: string;
+  count: number;
+}
+
 export interface EngineConfig {
   dataSource: DataSource;
-  filters: StockFilter[];
+  strategy: Strategy;
   notifiers: Notifier[];
   pollIntervalMs: number;
   dedupeCooldownMs: number;
   maxAlerts: number;
   timeWindow?: {
-    startHour: number; // 0-23, in local time
+    startHour: number;
     endHour: number;
   };
 }

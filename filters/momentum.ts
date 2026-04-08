@@ -1,37 +1,39 @@
 import type { Stock, StockFilter } from "../core/types.js";
 import { log } from "../utils/logger.js";
+import { createPriceFilter } from "./price.js";
+import { createVolumeFilter } from "./volume.js";
+import { createPercentChangeFilter } from "./percent-change.js";
 
 export interface MomentumFilterOptions {
   minPrice?: number;
+  maxPrice?: number;
   minPercentChange?: number;
   maxPercentChange?: number;
   minVolume?: number;
+  minRelativeVolume?: number;
 }
 
-const DEFAULTS: Required<MomentumFilterOptions> = {
-  minPrice: 10,
-  minPercentChange: 2,
-  maxPercentChange: 6,
-  minVolume: 1_000_000,
-};
-
+/**
+ * Convenience filter that composes price + volume + percent-change filters.
+ * All thresholds are configurable — no hardcoded strategy assumptions.
+ */
 export function createMomentumFilter(opts: MomentumFilterOptions = {}): StockFilter {
-  const config = { ...DEFAULTS, ...opts };
+  const chain: StockFilter[] = [
+    createPriceFilter({ min: opts.minPrice, max: opts.maxPrice }),
+    createVolumeFilter({ minVolume: opts.minVolume, minRelativeVolume: opts.minRelativeVolume }),
+    createPercentChangeFilter({ min: opts.minPercentChange, max: opts.maxPercentChange }),
+  ];
 
   return {
     name: "momentum",
 
     async apply(stocks: Stock[]): Promise<Stock[]> {
-      const filtered = stocks.filter(
-        (s) =>
-          s.price > config.minPrice &&
-          s.percentChange >= config.minPercentChange &&
-          s.percentChange <= config.maxPercentChange &&
-          s.volume > config.minVolume
-      );
-
-      log("info", `[momentum] ${filtered.length}/${stocks.length} stocks passed filter`);
-      return filtered;
+      let result = stocks;
+      for (const filter of chain) {
+        result = await filter.apply(result);
+      }
+      log("info", `[momentum] ${result.length}/${stocks.length} stocks passed composite filter`);
+      return result;
     },
   };
 }
