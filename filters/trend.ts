@@ -279,43 +279,71 @@ export function scoreTrend(bars: Bar[]): number {
 
 // --- Chart data fetching ---
 
-async function fetchIntradayBars(symbol: string, interval: string, range: string, barCount: number): Promise<Bar[]> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
+/**
+ * Fetch bar data from Yahoo Finance chart API.
+ * Returns null on any failure (HTTP error, bad response, network issue)
+ * so the caller can degrade gracefully instead of crashing.
+ *
+ * Example working URL:
+ *   https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=5m&range=1d
+ *
+ * Note: This endpoint requires a valid crumb + cookie pair.
+ * Set YAHOO_CRUMB and YAHOO_COOKIE env vars. Without them, Yahoo
+ * returns HTTP 400 or 401.
+ */
+async function fetchChartBars(symbol: string, interval: string, range: string, barCount: number): Promise<Bar[] | null> {
+  // Use the raw symbol without encoding for the path segment —
+  // Yahoo expects e.g. /chart/BRK-B not /chart/BRK%2DB
+  const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`);
+  url.searchParams.set("interval", interval);
+  url.searchParams.set("range", range);
 
-  const headers: Record<string, string> = { "User-Agent": "Mozilla/5.0" };
   const crumb = process.env.YAHOO_CRUMB;
   const cookie = process.env.YAHOO_COOKIE;
-  if (cookie) headers["Cookie"] = cookie;
 
-  let fullUrl = url;
-  if (crumb) fullUrl += `&crumb=${encodeURIComponent(crumb)}`;
-
-  const res = await fetch(fullUrl, { headers });
-  if (!res.ok) {
-    throw new Error(`Yahoo chart API ${res.status} for ${symbol}`);
+  if (crumb) {
+    url.searchParams.set("crumb", crumb);
   }
 
-  const data = await res.json() as {
-    chart: {
-      result: Array<{
-        indicators: {
-          quote: Array<{
-            close: (number | null)[];
-            high: (number | null)[];
-            low: (number | null)[];
-          }>;
-        };
-      }>;
-    };
+  const headers: Record<string, string> = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)",
   };
+  if (cookie) {
+    headers["Cookie"] = cookie;
+  }
 
-  const result = data?.chart?.result?.[0];
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), { headers });
+  } catch (err) {
+    log("warn", `[trend] ${symbol}: network error fetching chart data — ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+
+  if (!res.ok) {
+    log("warn", `[trend] ${symbol}: failed to fetch chart data (status ${res.status})`);
+    return null;
+  }
+
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    log("warn", `[trend] ${symbol}: invalid JSON in chart response`);
+    return null;
+  }
+
+  // Validate response structure
+  const result = (data as any)?.chart?.result?.[0];
   const quote = result?.indicators?.quote?.[0];
-  if (!quote) return [];
+  if (!quote || !Array.isArray(quote.close)) {
+    log("warn", `[trend] ${symbol}: unexpected chart response structure`);
+    return null;
+  }
 
-  const closes = quote.close ?? [];
-  const highs = quote.high ?? [];
-  const lows = quote.low ?? [];
+  const closes: (number | null)[] = quote.close ?? [];
+  const highs: (number | null)[] = quote.high ?? [];
+  const lows: (number | null)[] = quote.low ?? [];
 
   const bars: Bar[] = [];
   for (let i = 0; i < closes.length; i++) {
@@ -338,48 +366,52 @@ export function createTrendFilter(opts: TrendFilterOptions = {}): StockFilter {
     async apply(stocks: Stock[]): Promise<Stock[]> {
       const results: Stock[] = [];
 
+      log("info", `[trend] Analyzing ${stocks.length} candidate(s)...`);
+
       for (const stock of stocks) {
-        try {
-          const bars = await fetchIntradayBars(stock.symbol, config.interval, config.range, config.barCount);
-          const clean = sanitizeBars(bars);
+        const bars = await fetchChartBars(stock.symbol, config.interval, config.range, config.barCount);
 
-          if (clean.length < MIN_BARS) {
-            log("warn", `[trend] ${stock.symbol}: insufficient valid bars (${clean.length}/${bars.length}) — defaulting to choppy`);
-            continue;
-          }
-
-          const analysis = analyzeTrend(clean, config.recentWindowSize, {
-            weakThreshold: config.weakThreshold,
-            strongThreshold: config.strongThreshold,
-            accelerationWeight: config.accelerationWeight,
-            recentWeightMultiplier: config.recentWeightMultiplier,
-          });
-
-          const recentUsable = clean.length >= config.recentWindowSize;
-
-          log(
-            "info",
-            `[trend] ${stock.symbol}: ${analysis.label} ` +
-            `score=${analysis.score} ` +
-            `slope=${safe(analysis.overall.slope).toFixed(3)} ` +
-            `recentSlope=${safe(analysis.recent.slope).toFixed(3)} ` +
-            `accel=${safe(analysis.acceleration).toFixed(3)} ` +
-            `bars=${clean.length} recentWindow=${recentUsable ? "ok" : "partial"}`
-          );
-
-          if (analysis.label === "choppy") continue;
-
-          results.push({
-            ...stock,
-            trendLabel: analysis.label,
-            trendScore: analysis.score,
-            recentSlope: safe(Math.round(analysis.recent.slope * 1000) / 1000),
-            acceleration: safe(Math.round(analysis.acceleration * 1000) / 1000),
-            chartUrl: `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(stock.symbol)}`,
-          });
-        } catch (err) {
-          log("error", `[trend] ${stock.symbol}: ${err instanceof Error ? err.message : String(err)}`);
+        // Fetch failed or returned no data — skip gracefully
+        if (!bars) {
+          continue;
         }
+
+        const clean = sanitizeBars(bars);
+
+        if (clean.length < MIN_BARS) {
+          log("warn", `[trend] ${stock.symbol}: insufficient valid bars (${clean.length}/${bars.length}) — skipping`);
+          continue;
+        }
+
+        const analysis = analyzeTrend(clean, config.recentWindowSize, {
+          weakThreshold: config.weakThreshold,
+          strongThreshold: config.strongThreshold,
+          accelerationWeight: config.accelerationWeight,
+          recentWeightMultiplier: config.recentWeightMultiplier,
+        });
+
+        const recentUsable = clean.length >= config.recentWindowSize;
+
+        log(
+          "info",
+          `[trend] ${stock.symbol}: ${analysis.label} ` +
+          `score=${analysis.score} ` +
+          `slope=${safe(analysis.overall.slope).toFixed(3)} ` +
+          `recentSlope=${safe(analysis.recent.slope).toFixed(3)} ` +
+          `accel=${safe(analysis.acceleration).toFixed(3)} ` +
+          `bars=${clean.length} recentWindow=${recentUsable ? "ok" : "partial"}`
+        );
+
+        if (analysis.label === "choppy") continue;
+
+        results.push({
+          ...stock,
+          trendLabel: analysis.label,
+          trendScore: analysis.score,
+          recentSlope: safe(Math.round(analysis.recent.slope * 1000) / 1000),
+          acceleration: safe(Math.round(analysis.acceleration * 1000) / 1000),
+          chartUrl: `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(stock.symbol)}`,
+        });
       }
 
       log("info", `[trend] ${results.length}/${stocks.length} stocks passed filter`);
