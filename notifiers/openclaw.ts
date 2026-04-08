@@ -43,17 +43,17 @@ export function createOpenClawNotifier(opts: OpenClawOptions = {}): Notifier {
       const results = await Promise.allSettled(
         stocks.map((s) => {
           const payload = {
-            source: "stocklobster",
-            event: "screen_hit",
-            symbol: s.symbol,
-            message: `${s.symbol} hit ${strategy} criteria`,
-            timestamp: now,
-            data: {
-              price: s.price,
-              changePct: s.percentChange,
-              volume: s.volume,
-              strategy,
-            },
+            text: [
+              "StockLobster alert",
+              `Symbol: ${s.symbol}`,
+              "Event: screen_hit",
+              `Message: ${s.symbol} hit ${strategy} criteria`,
+              `Price: ${s.price}`,
+              `Change: ${s.percentChange}%`,
+              `Volume: ${s.volume}`,
+              `Strategy: ${strategy}`,
+              `Timestamp: ${now}`,
+            ].join("\n"),
           };
 
           return fetch(hooksUrl, {
