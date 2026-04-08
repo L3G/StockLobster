@@ -38,8 +38,6 @@ npm start
 |---|---|---|
 | `OPENCLAW_GATEWAY_URL` | OpenClaw ingest endpoint | `http://localhost:3000/api/ingest` |
 | `OPENCLAW_API_KEY` | API key for OpenClaw | — |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token (optional) | — |
-| `TELEGRAM_CHAT_ID` | Telegram chat ID (optional) | — |
 | `POLL_INTERVAL_MS` | Polling interval in milliseconds | `300000` (5 min) |
 | `TIME_WINDOW_START` | Hour to start running (0-23) | — |
 | `TIME_WINDOW_END` | Hour to stop running (0-23) | — |

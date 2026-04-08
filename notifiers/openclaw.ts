@@ -15,17 +15,16 @@ export function createOpenClawNotifier(opts: OpenClawOptions = {}): Notifier {
 
     async send(stocks: Stock[]): Promise<void> {
       const payload = {
-        source: "stocklobster",
+        type: "momentum_candidates",
         timestamp: Date.now(),
         signals: stocks.map((s) => ({
           symbol: s.symbol,
           price: s.price,
           percentChange: s.percentChange,
           volume: s.volume,
-          avgVolume: s.avgVolume,
-          timestamp: s.timestamp,
           trendLabel: s.trendLabel,
           trendScore: s.trendScore,
+          acceleration: s.acceleration,
           chartUrl: s.chartUrl ?? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(s.symbol)}`,
         })),
       };
@@ -37,7 +36,7 @@ export function createOpenClawNotifier(opts: OpenClawOptions = {}): Notifier {
         headers["Authorization"] = `Bearer ${apiKey}`;
       }
 
-      log("info", `[openclaw] Sending ${stocks.length} signals to ${gatewayUrl}`);
+      log("info", `[openclaw] Sending ${stocks.length} signal(s) to ${gatewayUrl}`);
 
       const res = await fetch(gatewayUrl, {
         method: "POST",
@@ -46,10 +45,11 @@ export function createOpenClawNotifier(opts: OpenClawOptions = {}): Notifier {
       });
 
       if (!res.ok) {
+        log("error", `[openclaw] HTTP ${res.status} ${res.statusText} from ${gatewayUrl}`);
         throw new Error(`OpenClaw responded with ${res.status}: ${res.statusText}`);
       }
 
-      log("info", `[openclaw] Successfully delivered ${stocks.length} signals`);
+      log("info", `[openclaw] Delivered ${stocks.length} signal(s) — HTTP ${res.status}`);
     },
   };
 }

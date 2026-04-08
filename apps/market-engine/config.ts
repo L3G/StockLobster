@@ -4,7 +4,6 @@ import { normalizeYahooGainers } from "../../core/normalize.js";
 import { createMomentumFilter } from "../../filters/momentum.js";
 import { createTrendFilter } from "../../filters/trend.js";
 import { createOpenClawNotifier } from "../../notifiers/openclaw.js";
-import { createTelegramNotifier } from "../../notifiers/telegram.js";
 
 const yahooGainersSource: DataSource = {
   name: "yahoo-gainers",
@@ -31,7 +30,6 @@ export function loadConfig(): EngineConfig {
     ],
     notifiers: [
       createOpenClawNotifier(),
-      ...(process.env.TELEGRAM_BOT_TOKEN ? [createTelegramNotifier()] : []),
     ],
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS) || 5 * 60 * 1000,
     dedupeCooldownMs: Number(process.env.DEDUPE_COOLDOWN_MS) || 15 * 60 * 1000, // 15 minutes
